@@ -1,0 +1,65 @@
+Thể lệ cuộc thi
+Cá nhân/đội thi tập trung vào việc làm cho một mô hình LLM hoạt động tốt hơn. Nhiệm vụ là tinh chỉnh, tối ưu hoặc tái cấu trúc pipeline sử dụng mô hình để đạt được hiệu suất vượt trội khi trả lời một bộ câu hỏi trắc nghiệm được thiết kế sát với thực tiễn sử dụng của người Việt. Đây không chỉ là bài kiểm tra khả năng xử lý ngôn ngữ tự nhiên, mà còn là thước đo cho mức độ hiểu biết văn hoá, tư duy logic và độ tin cậy khi triển khai trong môi trường Việt Nam.
+
+Các đội sẽ được cung cấp API từ mô hình của VNPT AI:
+
+1000 api requests/ngày/vnptai_hackathon_small
+
+500 api requests/ngày/vnptai_hackathon_large
+
+500 api requests/ngày/vnptai_hackathon_embedding
+
+Bộ dữ liệu được thiết kế xoay quanh các kiến thức chính xác, chính thống liên quan đến văn hoá, lịch sử, địa lý, chính trị Việt Nam, với các nhóm:
+
+Câu hỏi bắt buộc không được trả lời
+
+Câu hỏi bắt buộc phải trả lời đúng
+
+Câu hỏi đọc hiểu văn bản dài
+
+Câu hỏi toán học và tư duy logic
+
+Câu hỏi đa lĩnh vực
+
+doituong
+Phạm vi cho phép
+Các đội được phép thu thập dữ liệu trên internet để xây vector database, yêu cầu các đội thu thập dữ liệu từ các nguồn mở, license cho phép sử dụng. BTC sẽ không chịu trách nhiệm nếu các đội thi sử dụng các dữ liệu bảo mật hoặc không được cấp phép/license.
+
+Pipeline không được sử dụng các external API như ChatGPT, Gemini,... hay API cung cấp các thông tin search, tra cứu dưới bất kỳ hình thức nào trong thời gian inference.
+
+🔥 VÒNG 1: TEST THE LIMIT
+doituong
+Nhiệm vụ
+Thời gian: 05/12/2025 tới hết ngày 17/12/2025.
+
+Các đội thi sẽ được cấp quota truy cập API giới hạn mỗi ngày, và làm việc với bộ dữ liệu public test để điều chỉnh, đánh giá mô hình và thực thi các chiến lược để tối ưu model.
+
+Tập dữ liệu
+
+Dev set: 100 câu hỏi
+
+Test set (public): 400 câu hỏi
+
+Quota sử dụng:
+
+1000 api requests/ngày/vnptai_hackathon_small
+
+500 api requests/ngày/vnptai_hackathon_large
+
+500 api requests/phút/vnptai_hackathon_embedding
+
+Số lần submit kết quả: Tối đa 5 lần/ ngày.
+
+doituong
+Yêu cầu đầu ra
+Docker Container: Docker hub
+
+Entry-point: Đọc public_test.csv hoặc private_test.csv tại /data, ghi pred.csv vào /output với hai cột: qid,answer (A/B/C/D).
+
+Github chứa code và các chạy reproduce kết quả trong container.
+
+Tài liệu thuyết minh phương pháp: Định dạng tuỳ chọn với mục tiêu thể hiện được rõ nhất tính sáng tạo, hiệu quả của chiến lược tối ưu mô hình đã lựa chọn.
+
+doituong
+Kết quả
+Các cá nhân/đội thi xem trực tiếp kết quả trên leaderboard. Trong vòng 72h kể từ khi kết thúc vòng 1, các cá nhân/đội thi phải gửi đầy đủ tài liệu được BTC yêu cầu trong mục “Yêu cầu đầu ra”. Các đội thi không gửi lại theo thời hạn sẽ tự động bị loại khỏi cuộc thi.

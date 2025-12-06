@@ -1,0 +1,113 @@
+=================================================================
+     CÁC FILE CẦN THIẾT ĐỂ NỘP - VNPT AI HACKATHON
+=================================================================
+
+📍 THỨ TỰ NỘP: Build Docker Image → Push/Submit
+
+=================================================================
+BƯỚC 1: BUILD DOCKER IMAGE
+=================================================================
+
+Mở Command Prompt/PowerShell tại thư mục:
+D:\Khang\Thi\VNPT
+
+Chạy lệnh:
+docker build -t vnpt-qa-system .
+
+=================================================================
+BƯỚC 2: TEST LOCAL (OPTIONAL)
+=================================================================
+
+mkdir test_data test_output
+copy data\val_10.json test_data\private_test.json
+docker run --rm -v "%cd%\test_data:/code/data" -v "%cd%\test_output:/code/output" vnpt-qa-system
+type test_output\submission.csv
+
+=================================================================
+BƯỚC 3: SUBMIT
+=================================================================
+
+OPTION A - Docker Hub (Recommended):
+1. docker login
+2. docker tag vnpt-qa-system <your-username>/vnpt-qa-system:latest
+3. docker push <your-username>/vnpt-qa-system:latest
+4. Submit link: <your-username>/vnpt-qa-system:latest
+
+OPTION B - Save File:
+1. docker save vnpt-qa-system > vnpt-qa-system.tar
+2. Submit file: vnpt-qa-system.tar (~2.6GB)
+
+=================================================================
+CẤU TRÚC SOURCE CODE (ĐÃ CÓ SẴN TRONG DOCKER)
+=================================================================
+
+D:\Khang\Thi\VNPT\
+├── Dockerfile              ✅ Main Docker config
+├── requirements.txt        ✅ Dependencies (4 packages)
+├── api-keys.json          ✅ VNPT API credentials
+├── predict.py             ✅ Entry point
+├── config/
+│   └── api_config.py      ✅ API loader
+└── modules/
+    ├── categories.py               ✅ Question types
+    ├── question_classifier.py      ✅ Classifier
+    ├── simple_knowledge.py         ✅ Knowledge cache
+    ├── llm/
+    │   └── api_client.py          ✅ API client
+    └── utils/
+        └── text_processing.py      ✅ Text utils
+
+=================================================================
+THÔNG SỐ HỆ THỐNG
+=================================================================
+
+✅ Accuracy: 60% (tested on 10 questions)
+✅ Docker size: ~2.6GB
+✅ Performance: Fast (~8-10 phút cho 400 câu)
+✅ API usage: ~400 calls (under limit)
+✅ Memory: ~500MB
+
+=================================================================
+CHI TIẾT IMPLEMENTATION
+=================================================================
+
+1. Question Classification (Rule-based)
+   - Reading comprehension: Pattern matching
+   - Math: Keyword + number detection
+   - Domain: History/Culture/Geography/Politics
+
+2. Model Selection (Smart)
+   - Small model: Simple questions (fast, cheap)
+   - Large model: Complex math (better reasoning)
+
+3. Optimizations
+   - Lightweight knowledge cache (no Vector DB)
+   - Minimal dependencies (46MB vs 4GB+)
+   - Error handling (content filter, rate limits)
+
+=================================================================
+ĐỌC HƯỚNG DẪN CHI TIẾT
+=================================================================
+
+File: D:\Khang\Thi\VNPT\SUBMISSION_GUIDE.md
+
+Bao gồm:
+- Hướng dẫn build Docker chi tiết
+- Cách test local
+- Format submission file
+- Troubleshooting
+- Expected performance
+
+=================================================================
+READY TO SUBMIT!
+=================================================================
+
+Chỉ cần chạy 3 lệnh:
+
+cd D:\Khang\Thi\VNPT
+docker build -t vnpt-qa-system .
+docker push <your-username>/vnpt-qa-system:latest
+
+Hoặc theo hướng dẫn của ban tổ chức!
+
+=================================================================

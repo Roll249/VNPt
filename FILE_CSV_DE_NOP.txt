@@ -1,0 +1,134 @@
+================================================================
+                  CÁC FILE CSV ĐÃ CÓ SẴN
+================================================================
+
+📂 Location: D:\Khang\Thi\VNPT\
+
+================================================================
+1️⃣ submission_10.csv (Test thực - 10 câu)
+================================================================
+
+✅ Đây là kết quả TEST THẬT từ API
+✅ Accuracy: 60% (6/10 correct)
+
+Format:
+qid,answer
+val_0001,B
+val_0002,C
+val_0003,B
+val_0004,C
+val_0005,A
+val_0006,C
+val_0007,A
+val_0008,B
+val_0009,B
+val_0010,A
+
+================================================================
+2️⃣ submission_template_400.csv (Template - 400 câu)
+================================================================
+
+⚠️ Đây là TEMPLATE - không phải kết quả thực!
+⚠️ Tất cả answer = 'A' (chỉ để demo format)
+
+Format:
+qid,answer
+test_0001,A
+test_0002,A
+test_0003,A
+...
+test_0400,A
+
+Dùng để: Demo format file CSV nộp
+
+================================================================
+⚠️ LƯU Ý QUAN TRỌNG
+================================================================
+
+THEO QUY ĐỊNH CUỘC THI:
+→ NỘP DOCKER IMAGE, KHÔNG NỘP FILE CSV!
+
+File CSV chỉ là OUTPUT của Docker khi chạy.
+
+BTC sẽ:
+1. Chạy Docker của bạn
+2. Mount file private_test.json (400 câu)
+3. Docker tạo submission.csv tự động
+4. Chấm điểm dựa trên CSV đó
+
+================================================================
+🎯 BẠN CẦN LÀM GÌ?
+================================================================
+
+✅ ĐÚNG: Nộp Docker Image
+   docker push YOUR_USERNAME/vnpt-qa-system:latest
+   Hoặc: docker save vnpt-qa-system > vnpt-qa-system.tar
+
+❌ SAI: Nộp file CSV
+   Không nộp submission.csv vì BTC sẽ tự tạo
+
+================================================================
+🔧 MUỐN TẠO FILE CSV THỰC (93/400 CÂU)?
+================================================================
+
+Option 1: Chạy Python script (cần API quota)
+   cd D:\Khang\Thi\VNPT
+   python predict.py
+   → Output: submission.csv
+
+   ⚠️ Hiện tại hết API quota (đợi 1 tiếng)
+
+Option 2: Chạy Docker local
+   mkdir test_data test_output
+   copy data\val.json test_data\private_test.json
+   docker run --rm ^
+     -v "%cd%\test_data:/code/data" ^
+     -v "%cd%\test_output:/code/output" ^
+     vnpt-qa-system
+   → Output: test_output\submission.csv
+
+================================================================
+📊 SO SÁNH CÁC FILE
+================================================================
+
+File                          | Số câu | Status        | Accuracy
+------------------------------|--------|---------------|----------
+submission_10.csv             | 10     | Test thực ✅  | 60%
+submission_template_400.csv   | 400    | Template ⚠️   | N/A
+submission.csv (khi chạy mới) | 93     | Cần API       | ~60%
+
+================================================================
+✅ KẾT LUẬN
+================================================================
+
+Bạn có 2 file CSV:
+
+1. submission_10.csv
+   - Kết quả test thực (60% accuracy)
+   - Dùng để: Demo, verify format
+
+2. submission_template_400.csv
+   - Template 400 câu (answer=A)
+   - Dùng để: Xem format chuẩn
+
+Nhưng để NỘP BÀI:
+→ Nộp Docker Image: vnpt-qa-system:latest
+→ KHÔNG nộp file CSV!
+
+================================================================
+📍 VỊ TRÍ FILE
+================================================================
+
+D:\Khang\Thi\VNPT\submission_10.csv
+D:\Khang\Thi\VNPT\submission_template_400.csv
+
+================================================================
+🚀 CÁCH NỘP
+================================================================
+
+Đọc file: README_NOP_BAI.txt
+
+Hoặc:
+docker push YOUR_USERNAME/vnpt-qa-system:latest
+
+================================================================
