@@ -27,8 +27,23 @@ class SimplePipeline:
         self.classifier = classifier
         self.llm = llm_client
 
-        # TODO: Load vector DBs if they exist
-        # self.vector_dbs = self._load_vector_dbs()
+        self.llm = llm_client
+        
+        # Load vector DB for domain questions
+        try:
+            from modules.vector_db.vector_db_manager import VectorDBManager
+            # Assume index is at data/faiss_index.bin and metadata at data/chunk_metadata.jsonl
+            # These paths should be relative to where run is executed, or absolute.
+            # In docker, likely /code/data/... 
+            # We'll try to find them.
+            base_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__))) # VNPt dir
+            index_path = os.path.join(base_dir, 'data', 'faiss_index.bin')
+            metadata_path = os.path.join(base_dir, 'data', 'chunk_metadata.jsonl')
+            
+            self.vector_db = VectorDBManager(index_path, metadata_path, self.llm)
+        except Exception as e:
+            print(f"⚠ Vector DB initialization failed: {e}")
+            self.vector_db = None
 
     def predict_single(self, question: str, choices: List[str], qid: str = "") -> str:
         """
@@ -69,7 +84,6 @@ class SimplePipeline:
 
             else:
                 # Domain questions (history, culture, geography, politics)
-                # TODO: Use RAG retrieval
                 return self._handle_domain_question(question, choices, category)
 
         except Exception as e:
@@ -153,16 +167,46 @@ class SimplePipeline:
         choices: List[str],
         category: QuestionCategory
     ) -> str:
-        """Handle domain-specific questions (with simple knowledge augmentation)"""
+        """Handle domain-specific questions (with Vector DB Retrieval)"""
+        
+        context = ""
+        if self.vector_db:
+            try:
+                # Retrieve relevant info
+                # Query augmentation: maybe add category name?
+                query = f"{category.value}: {question}"
+                results = self.vector_db.search(query, top_k=3)
+                
+                if results:
+                    print(f"  → Retrieved {len(results)} docs from Vector DB")
+                    context_fragments = []
+                    for i, res in enumerate(results):
+                        # Limit text length per chunk
+                        text = res['metadata'].get('text', '')[:300] 
+                        source = res['metadata'].get('source', 'Unknown')
+                        context_fragments.append(f"[{i+1}] {text} (Nguồn: {source})")
+                    
+                    context = "\n\n".join(context_fragments)
+            except Exception as e:
+                print(f"  ⚠ Retrieval failed: {e}")
 
         # Build base prompt
         base_prompt = self._build_domain_prompt(question, choices, category)
 
-        # Augment with simple facts (lightweight RAG alternative)
-        augmented_prompt = augment_prompt_with_facts(question, base_prompt)
+        if context:
+            # Inject context into prompt
+            # We insert it before the question
+            prompt_with_context = f"""Thông tin tham khảo:
+{context}
+
+{base_prompt}"""
+            final_prompt = prompt_with_context
+        else:
+            # Fallback to simple facts augmentation if no vector context (or as backup)
+            final_prompt = augment_prompt_with_facts(question, base_prompt)
 
         # Use Small model (faster, cheaper)
-        response = self.llm.generate(augmented_prompt, model="small", temperature=0.3)
+        response = self.llm.generate(final_prompt, model="small", temperature=0.3)
 
         answer = self._extract_answer(response, choices)
         return answer
@@ -365,8 +409,12 @@ def main():
 
     # For local testing
     if not os.path.exists(input_path):
-        input_path = "data/val.json"  # Use full validation set
-        output_path = "submission.csv"
+        if os.path.exists("data/test.json"):
+            input_path = "data/test.json"
+        else:
+            input_path = "data/val.json"  # Use full validation set
+        
+        output_path = "output/submission.csv"  # Write to output folder locally
 
     print(f"Reading from: {input_path}")
     print(f"Writing to: {output_path}")
