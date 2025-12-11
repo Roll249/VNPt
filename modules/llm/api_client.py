@@ -8,6 +8,11 @@ from typing import Dict, List, Optional, Any
 import sys
 import os
 
+# Custom exception for rate limiting
+class RateLimitException(Exception):
+    """Raised when API rate limit is hit"""
+    pass
+
 # Add parent directory to path
 sys.path.append(os.path.dirname(os.path.dirname(os.path.dirname(__file__))))
 

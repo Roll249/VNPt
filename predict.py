@@ -13,7 +13,7 @@ import time
 # Import modules
 from modules.question_classifier import classifier
 from modules.categories import QuestionCategory
-from modules.llm.api_client import llm_client
+from modules.llm.api_client import llm_client, RateLimitException
 from modules.utils.text_processing import (
     extract_context_from_question,
     extract_question_from_reading,
@@ -487,25 +487,33 @@ def main():
 
         try:
             answer = pipeline.predict_single(question, choices, qid)
+        except RateLimitException as e:
+            # Rate limit hit - STOP and don't write fallback
+            print(f"\n🛑 RATE LIMIT HIT at question {i+1}/{len(questions)} ({qid})")
+            print(f"   Already processed: {len(answered_qids) + len(results)} questions")
+            print(f"   Please wait ~1 hour and run script again.")
+            print(f"   Script will resume from {qid}")
+            break  # Exit loop, don't save this question
         except Exception as e:
             print(f"ERROR: {e}")
-            answer = random.choice(['A', 'B', 'C', 'D'])  # Random fallback
+            answer = random.choice(['A', 'B', 'C', 'D'])  # Random fallback for other errors
+        else:
+            # Only write if we have an answer (no rate limit)
+            results.append({
+                'qid': qid,
+                'answer': answer
+            })
 
-        results.append({
-            'qid': qid,
-            'answer': answer
-        })
+            print(f"Answer: {answer}")
 
-        print(f"Answer: {answer}")
+            # Write immediately to CSV (append mode)
+            with open(output_path, 'a', encoding='utf-8', newline='') as f:
+                writer = csv.DictWriter(f, fieldnames=['qid', 'answer'])
+                writer.writerow({'qid': qid, 'answer': answer})
 
-        # Write immediately to CSV (append mode)
-        with open(output_path, 'a', encoding='utf-8', newline='') as f:
-            writer = csv.DictWriter(f, fieldnames=['qid', 'answer'])
-            writer.writerow({'qid': qid, 'answer': answer})
-
-        # Flush to disk every 10 questions
-        if len(results) % 10 == 0:
-            print(f"✓ Saved progress: {len(answered_qids) + len(results)}/{len(questions)} total questions")
+            # Flush to disk every 10 questions
+            if len(results) % 10 == 0:
+                print(f"✓ Saved progress: {len(answered_qids) + len(results)}/{len(questions)} total questions")
 
     print(f"\n✓ Done! Output written to {output_path}")
     print(f"  Skipped (already answered): {skipped_count}")
