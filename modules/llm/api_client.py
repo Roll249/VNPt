@@ -21,6 +21,42 @@ class VNPTClient:
         self.config = api_config
         self.session = requests.Session()  # Reuse connections
 
+    def retry_api_call(max_retries=3):
+        """Retry decorator with exponential backoff"""
+        def decorator(func):
+            def wrapper(*args, **kwargs):
+                for attempt in range(max_retries):
+                    try:
+                        result = func(*args, **kwargs)
+                        if result and len(str(result).strip()) > 0:
+                            time.sleep(0.5)  # Small delay after success
+                            return result
+                        # Empty result, retry
+                        if attempt < max_retries - 1:
+                            wait = 2 ** attempt
+                            print(f"  ⚠ Empty response, retry in {wait}s...")
+                            time.sleep(wait)
+                    except requests.exceptions.HTTPError as e:
+                        if e.response.status_code == 429:  # Rate limit
+                            wait = 2 ** (attempt + 2)
+                            print(f"  ⚠ Rate limit (429), wait {wait}s...")
+                            time.sleep(wait)
+                        elif attempt < max_retries - 1:
+                            print(f"  ⚠ HTTP error, retry...")
+                            time.sleep(2 ** attempt)
+                        else:
+                            return ""
+                    except Exception as e:
+                        if attempt < max_retries - 1:
+                            print(f"  ⚠ Error: {e}, retry...")
+                            time.sleep(2 ** attempt)
+                        else:
+                            return ""
+                return ""
+            return wrapper
+        return decorator
+
+    @retry_api_call(max_retries=3)
     def chat_completion(
         self,
         messages: List[Dict],

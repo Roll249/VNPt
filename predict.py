@@ -7,6 +7,8 @@ import csv
 import os
 import sys
 from typing import List, Dict
+import random
+import time
 
 # Import modules
 from modules.question_classifier import classifier
@@ -104,7 +106,7 @@ class SimplePipeline:
                 return chr(65 + idx)  # A, B, C, D
 
         # If no refusal option, use LLM to pick safest answer
-        return "A"  # Fallback
+        return random.choice(['A', 'B', 'C', 'D', 'E', 'F'])  # Fallback
 
     def _handle_reading(self, question: str, choices: List[str]) -> str:
         """Handle reading comprehension (context already in question)"""
@@ -159,7 +161,7 @@ class SimplePipeline:
                     answer = letter
                     break
 
-        return answer if answer in valid_letters else valid_letters[0]
+        return answer if answer in valid_letters else random.choice(valid_letters)
 
     def _handle_domain_question(
         self,
@@ -398,11 +400,11 @@ Hãy chọn đáp án đúng nhất. Chỉ trả lời bằng 1 chữ cái.
             response = self.llm.generate(prompt, model="small", temperature=0.5)
             return self._extract_answer(response, choices)
         except:
-            return 'A'
+            return random.choice(['A', 'B', 'C', 'D'])
 
 
 def main():
-    """Main entry point"""
+    """Main entry point with resume capability"""
     # Paths
     input_path = "/code/data/private_test.json"  # Docker will mount this
     output_path = "/code/output/submission.csv"
@@ -428,29 +430,66 @@ def main():
     # Initialize pipeline
     pipeline = SimplePipeline()
 
-    # Write CSV header first
+    # Ensure output directory exists
     output_dir = os.path.dirname(output_path)
     if output_dir:
         os.makedirs(output_dir, exist_ok=True)
 
-    with open(output_path, 'w', encoding='utf-8', newline='') as f:
-        writer = csv.DictWriter(f, fieldnames=['qid', 'answer'])
-        writer.writeheader()
+    # RESUME LOGIC: Check if output file exists and load answered questions
+    answered_qids = set()
+    file_exists = os.path.exists(output_path)
+    
+    if file_exists:
+        try:
+            with open(output_path, 'r', encoding='utf-8') as f:
+                reader = csv.DictReader(f)
+                for row in reader:
+                    answered_qids.add(row['qid'])
+            print(f"✓ Found existing file with {len(answered_qids)} answered questions")
+            print(f"  Resuming from question {len(answered_qids) + 1}...")
+        except Exception as e:
+            print(f"⚠ Could not read existing file: {e}")
+            print(f"  Starting fresh...")
+            answered_qids = set()
+            file_exists = False
+    
+    # Create file with header if it doesn't exist
+    if not file_exists:
+        with open(output_path, 'w', encoding='utf-8', newline='') as f:
+            writer = csv.DictWriter(f, fieldnames=['qid', 'answer'])
+            writer.writeheader()
+        print(f"✓ Created new output file")
 
     # Predict and write incrementally
     results = []
+    skipped_count = 0
+    
     for i, q in enumerate(questions):
         qid = q['qid']
         question = q['question']
         choices = q['choices']
 
+        # SKIP if already answered
+        if qid in answered_qids:
+            skipped_count += 1
+            if skipped_count % 50 == 0:
+                print(f"  ⏩ Skipped {skipped_count} already-answered questions...")
+            continue
+
         print(f"\n[{i+1}/{len(questions)}] Processing {qid}...")
+
+        # Rate limiting delay
+        if len(results) > 0:  # Only delay after first NEW question
+            time.sleep(0.8)  # 0.8 second between requests
+            if (len(results) + 1) % 50 == 0:
+                print(f"  ⏸ Cooldown after {len(results)+1} new questions...")
+                time.sleep(10)
 
         try:
             answer = pipeline.predict_single(question, choices, qid)
         except Exception as e:
             print(f"ERROR: {e}")
-            answer = 'A'  # Fallback
+            answer = random.choice(['A', 'B', 'C', 'D'])  # Random fallback
 
         results.append({
             'qid': qid,
@@ -465,11 +504,13 @@ def main():
             writer.writerow({'qid': qid, 'answer': answer})
 
         # Flush to disk every 10 questions
-        if (i + 1) % 10 == 0:
-            print(f"✓ Saved progress: {i+1}/{len(questions)} questions")
+        if len(results) % 10 == 0:
+            print(f"✓ Saved progress: {len(answered_qids) + len(results)}/{len(questions)} total questions")
 
     print(f"\n✓ Done! Output written to {output_path}")
-    print(f"Total questions processed: {len(results)}")
+    print(f"  Skipped (already answered): {skipped_count}")
+    print(f"  Newly processed: {len(results)}")
+    print(f"  Total in file: {len(answered_qids) + len(results)}/{len(questions)}")
 
 
 if __name__ == "__main__":
