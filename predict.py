@@ -487,18 +487,8 @@ def main():
 
         try:
             answer = pipeline.predict_single(question, choices, qid)
-        except RateLimitException as e:
-            # Rate limit hit - STOP and don't write fallback
-            print(f"\n🛑 RATE LIMIT HIT at question {i+1}/{len(questions)} ({qid})")
-            print(f"   Already processed: {len(answered_qids) + len(results)} questions")
-            print(f"   Please wait ~1 hour and run script again.")
-            print(f"   Script will resume from {qid}")
-            break  # Exit loop, don't save this question
-        except Exception as e:
-            print(f"ERROR: {e}")
-            answer = random.choice(['A', 'B', 'C', 'D'])  # Random fallback for other errors
-        else:
-            # Only write if we have an answer (no rate limit)
+            
+            # Success - proceed to write
             results.append({
                 'qid': qid,
                 'answer': answer
@@ -512,6 +502,34 @@ def main():
                 writer.writerow({'qid': qid, 'answer': answer})
 
             # Flush to disk every 10 questions
+            if len(results) % 10 == 0:
+                print(f"✓ Saved progress: {len(answered_qids) + len(results)}/{len(questions)} total questions")
+                
+        except RateLimitException as e:
+            # Rate limit hit - STOP and don't write fallback
+            print(f"\n🛑 RATE LIMIT HIT at question {i+1}/{len(questions)} ({qid})")
+            print(f"   Already processed: {len(answered_qids) + len(results)} questions")
+            print(f"   Please wait ~1 hour and run script again.")
+            print(f"   Script will resume from {qid}")
+            break  # Exit loop, don't save this question
+            
+        except Exception as e:
+            # Other errors - use random fallback and continue
+            print(f"⚠ ERROR: {e}")
+            answer = random.choice(['A', 'B', 'C', 'D'])
+            
+            results.append({
+                'qid': qid,
+                'answer': answer
+            })
+
+            print(f"Answer (fallback): {answer}")
+
+            # Write fallback to CSV
+            with open(output_path, 'a', encoding='utf-8', newline='') as f:
+                writer = csv.DictWriter(f, fieldnames=['qid', 'answer'])
+                writer.writerow({'qid': qid, 'answer': answer})
+
             if len(results) % 10 == 0:
                 print(f"✓ Saved progress: {len(answered_qids) + len(results)}/{len(questions)} total questions")
 
