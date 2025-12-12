@@ -36,18 +36,6 @@ MATH_KEYWORDS = [
     "giải", "đạo hàm", "tích phân"
 ]
 
-REFUSAL_KEYWORDS = [
-    "trốn", "tránh", "lẩn tránh",
-    "gian lận", "lừa đảo", "lừa gạt",
-    "vi phạm", "trái phép",
-    "bất hợp pháp", "phi pháp",
-    "tham nhũng", "hối lộ",
-    "trốn thuế", "tránh thuế",
-    "làm cách nào để tránh",
-    "cách để trốn",
-    "làm sao để không"
-]
-
 HISTORY_KEYWORDS = [
     "nhà", "triều đại", "vua",
     "năm", "thế kỷ",
@@ -89,6 +77,57 @@ POLITICS_KEYWORDS = [
     "pháp luật", "quy định"
 ]
 
+REFUSAL_KEYWORDS = [
+    "trốn", "tránh", "lẩn tránh",
+    "gian lận", "lừa đảo", "lừa gạt",
+    "vi phạm", "trái phép",
+    "bất hợp pháp", "phi pháp",
+    "tham nhũng", "hối lộ",
+    "trốn thuế", "tránh thuế",
+    "làm cách nào để tránh",
+    "cách để trốn",
+    "làm sao để không",
+    # Sensitive / Harmful
+    "hack", "tấn công", "bẻ khóa", "crack",
+    "ma túy", "thuốc phiện", "cần sa",
+    "mại dâm", "khiêu dâm", "sex",
+    "bom", "mìn", "thuốc nổ", "vũ khí",
+    "giết", "tự tử", "bạo lực", "khủng bố",
+    "phản động", "lật đổ"
+]
+
+# Strict phrases to look for in CHOICES (Answer options)
+REFUSAL_PHRASES = [
+    "không thể chia sẻ",
+    "tôi không thể",
+    "không thể cung cấp",
+    "vi phạm pháp luật",
+    "trái pháp luật",
+    "không hỗ trợ",
+    "từ chối trả lời",
+    "vấn đề nhạy cảm",
+    "không phù hợp",
+    "bất hợp pháp",
+    "phi pháp",
+    "gian lận",
+    "lừa đảo"
+]
+
+STEM_KEYWORDS = [
+    # Physics
+    "vận tốc", "gia tốc", "chuyển động", "lực", "công suất", "năng lượng",
+    "điện trở", "cường độ", "hiệu điện thế", "tụ điện", "từ trường",
+    "quang học", "ánh sáng", "thấu kính", "dao động", "sóng", "hạt nhân",
+    "áp suất", "nhiệt độ", "trọng lực", "khối lượng",
+    # Chemistry
+    "hóa học", "phản ứng", "phương trình", "nguyên tố", "nguyên tử",
+    "phân tử", "liên kết", "dung dịch", "nồng độ", "axit", "bazơ",
+    "muối", "kết tủa", "oxi hóa", "khử", "chất", "hợp chất", "mol",
+    # Biology
+    "sinh học", "tế bào", "gen", "adn", "nhiễm sắc thể", "di truyền",
+    "hệ sinh thái", "quang hợp", "hô hấp", "tiêu hóa", "thần kinh",
+    "loài", "quần thể", "tiến hóa", "vi sinh vật"
+]
 
 def contains_keywords(text: str, keywords: List[str]) -> bool:
     """Check if text contains any of the keywords"""

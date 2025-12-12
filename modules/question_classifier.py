@@ -12,6 +12,7 @@ from modules.categories import (
     CULTURE_KEYWORDS,
     GEOGRAPHY_KEYWORDS,
     POLITICS_KEYWORDS,
+    STEM_KEYWORDS,
     contains_keywords
 )
 
@@ -84,15 +85,18 @@ class QuestionClassifier:
         return refusal_count >= 2 or has_suspicious
 
     def _is_math_logic(self, question: str) -> bool:
-        """Check if question is math/logic"""
+        """Check if question is math/logic or STEM"""
         # Có số + có keyword math
         has_number = any(c.isdigit() for c in question)
         has_math_keyword = contains_keywords(question, MATH_KEYWORDS)
+        
+        # Check STEM keywords
+        has_stem = contains_keywords(question, STEM_KEYWORDS)
 
         # Hoặc có công thức pattern
         has_formula = any(sym in question for sym in ['=', '+', '-', '*', '/', '(', ')'])
 
-        return (has_number and has_math_keyword) or has_formula
+        return (has_number and has_math_keyword) or has_formula or has_stem
 
     def _score_history(self, question: str) -> float:
         """Score for history category"""
