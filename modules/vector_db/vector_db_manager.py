@@ -50,9 +50,25 @@ class VectorDBManager:
         if query_emb is None:
             return []
 
-        # Normalize for cosine similarity (if index was trained on normalized vectors)
-        # Assuming we normalize at build time, we must normalize query too.
-        query_vec = np.array([query_emb], dtype=np.float32)
+        # Use search_with_embedding
+        return self.search_with_embedding(query_emb, top_k)
+
+    def search_with_embedding(self, query_embedding: List[float], top_k: int = 3) -> List[Dict]:
+        """
+        Search using pre-computed embedding
+
+        Args:
+            query_embedding: Pre-computed query embedding vector
+            top_k: Number of results to return
+
+        Returns:
+            List of results with metadata and scores
+        """
+        if not self.index or not query_embedding:
+            return []
+
+        # Normalize for cosine similarity
+        query_vec = np.array([query_embedding], dtype=np.float32)
         faiss.normalize_L2(query_vec)
 
         # Search

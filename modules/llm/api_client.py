@@ -18,6 +18,14 @@ sys.path.append(os.path.dirname(os.path.dirname(os.path.dirname(__file__))))
 
 from config.api_config import api_config
 
+# Import rate limiter
+try:
+    from modules.utils.rate_limiter import rate_limiter
+    RATE_LIMITER_ENABLED = True
+except ImportError:
+    RATE_LIMITER_ENABLED = False
+    print("WARN: Rate limiter not available")
+
 
 class VNPTClient:
     """Client for VNPT AI APIs"""
@@ -257,13 +265,25 @@ class VNPTClient:
         Returns:
             Generated response
         """
+        # Apply rate limiting
+        if RATE_LIMITER_ENABLED:
+            api_type = "small" if model == "small" else "large"
+            rate_limiter.wait_if_needed(api_type)
+
         messages = [{"role": "user", "content": prompt}]
-        return self.chat_completion(
+        result = self.chat_completion(
             messages=messages,
             model=model,
             temperature=temperature,
             max_tokens=max_tokens
         )
+
+        # Record the call
+        if RATE_LIMITER_ENABLED:
+            api_type = "small" if model == "small" else "large"
+            rate_limiter.record_call(api_type)
+
+        return result
 
     def embed(self, text: str) -> List[float]:
         """
@@ -275,6 +295,10 @@ class VNPTClient:
         Returns:
             Embedding vector (list of floats)
         """
+        # Apply rate limiting
+        if RATE_LIMITER_ENABLED:
+            rate_limiter.wait_if_needed("embed")
+
         endpoint = self.config.get_endpoint("embedding")
         headers = self.config.get_headers("embedding")
 
@@ -294,7 +318,13 @@ class VNPTClient:
             response.raise_for_status()
 
             result = response.json()
-            return result['data'][0]['embedding']
+            embedding = result['data'][0]['embedding']
+
+            # Record the call
+            if RATE_LIMITER_ENABLED:
+                rate_limiter.record_call("embed")
+
+            return embedding
 
         except requests.exceptions.RequestException as e:
             print(f"Embedding API Error: {e}")
