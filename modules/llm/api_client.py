@@ -1,12 +1,12 @@
-"""
-VNPT AI API Client - Lightweight HTTP client for LLM APIs
-"""
-import requests
-import time
+"""VNPT AI API Client - Lightweight HTTP client for LLM APIs."""
+
 import json
-from typing import Dict, List, Optional, Any
-import sys
 import os
+import sys
+import time
+from typing import Dict, List
+
+import requests
 
 # Custom exception for rate limiting
 class RateLimitException(Exception):
@@ -52,11 +52,56 @@ class VNPTClient:
         # Create a stable string representation
         return f"{model}:{json.dumps(messages, sort_keys=True)}"
 
+    def _env_int(self, name: str, default: int) -> int:
+        try:
+            return int(os.getenv(name, str(default)).strip())
+        except Exception:
+            return default
+
+    def _env_str(self, name: str, default: str) -> str:
+        val = os.getenv(name)
+        return (val.strip() if isinstance(val, str) else default) or default
+
+    def _sleep_with_heartbeat(self, seconds: int):
+        """Sleep with optional heartbeat logs to show progress during long waits."""
+        heartbeat = self._env_int("VNPT_RATE_LIMIT_HEARTBEAT_SECONDS", 0)
+        if heartbeat <= 0 or seconds <= heartbeat:
+            time.sleep(max(seconds, 0))
+            return
+
+        remaining = max(seconds, 0)
+        while remaining > 0:
+            chunk = min(heartbeat, remaining)
+            time.sleep(chunk)
+            remaining -= chunk
+            if remaining > 0:
+                print(f"  WARN Waiting... {remaining}s remaining")
+
     def retry_api_call(max_retries=10):
-        """Retry decorator with exponential backoff"""
+        """Retry decorator with exponential backoff.
+
+        Behavior can be tuned via env vars:
+        - VNPT_RATE_LIMIT_MODE: 'wait' (default) or 'failfast'
+        - VNPT_RATE_LIMIT_MAX_RETRIES: overrides decorator max_retries
+        - VNPT_RATE_LIMIT_BASE_WAIT_SECONDS: base wait for rate limits (default: 60)
+        - VNPT_RATE_LIMIT_MAX_WAIT_SECONDS: cap per-wait (default: 600)
+        - VNPT_RATE_LIMIT_HEARTBEAT_SECONDS: prints a countdown during long waits
+        """
         def decorator(func):
             def wrapper(*args, **kwargs):
-                for attempt in range(max_retries):
+                self_obj = args[0] if args else None
+                if hasattr(self_obj, "_env_int"):
+                    effective_max_retries = self_obj._env_int("VNPT_RATE_LIMIT_MAX_RETRIES", max_retries)
+                    rate_limit_mode = self_obj._env_str("VNPT_RATE_LIMIT_MODE", "wait").lower()
+                    base_wait = self_obj._env_int("VNPT_RATE_LIMIT_BASE_WAIT_SECONDS", 60)
+                    max_wait = self_obj._env_int("VNPT_RATE_LIMIT_MAX_WAIT_SECONDS", 600)
+                else:
+                    effective_max_retries = max_retries
+                    rate_limit_mode = (os.getenv("VNPT_RATE_LIMIT_MODE") or "wait").strip().lower()
+                    base_wait = 60
+                    max_wait = 600
+
+                for attempt in range(max(1, effective_max_retries)):
                     try:
                         result = func(*args, **kwargs)
                         if result and len(str(result).strip()) > 0:
@@ -65,7 +110,7 @@ class VNPTClient:
                         # Empty result, retry
                         if attempt < max_retries - 1:
                             wait = 2 ** attempt
-                            print(f"  ⚠ Empty response, retry in {wait}s...")
+                            print(f"  WARN Empty response, retry in {wait}s...")
                             time.sleep(wait)
                     except requests.exceptions.HTTPError as e:
                         # Check if it's rate limit (429 or 401 with "rate limit" message)
@@ -81,25 +126,32 @@ class VNPTClient:
                                 message = str(error_data.get('message', '')).lower()
                                 if 'rate limit' in error_msg or 'rate limit' in message:
                                     is_rate_limit = True
-                            except:
+                            except Exception:
                                 pass
                         
                         if is_rate_limit:
-                            # Aggressive backoff for rate limit: 60s, 120s, 180s...
-                            wait = 60 * (attempt + 1)
-                            print(f"  ⚠ Rate limit detected, wait {wait}s...")
-                            time.sleep(wait)
-                            if attempt == max_retries - 1:
-                                # After all retries, raise exception to stop script
+                            if rate_limit_mode == "failfast":
+                                raise RateLimitException("Rate limit detected (failfast)")
+
+                            # Backoff for rate limit: base_wait, 2*base_wait, ... capped.
+                            wait = min(max_wait, base_wait * (attempt + 1))
+                            print(f"  WARN Rate limit detected, wait {wait}s...")
+                            if hasattr(self_obj, "_sleep_with_heartbeat"):
+                                self_obj._sleep_with_heartbeat(wait)
+                            else:
+                                time.sleep(wait)
+
+                            if attempt == effective_max_retries - 1:
+                                # After all retries, raise exception to allow the pipeline fallback.
                                 raise RateLimitException("Rate limit exceeded after retries")
                         elif attempt < max_retries - 1:
-                            print(f"  ⚠ HTTP error, retry...")
+                            print("  WARN HTTP error, retry...")
                             time.sleep(2 ** attempt)
                         else:
                             return ""
                     except Exception as e:
                         if attempt < max_retries - 1:
-                            print(f"  ⚠ Error: {e}, retry...")
+                            print(f"  WARN Error: {e}, retry...")
                             time.sleep(2 ** attempt)
                         else:
                             return ""
@@ -162,19 +214,19 @@ class VNPTClient:
                         error_json = json.loads(error_data)
                         if 'error' in error_json and 'message' in error_json['error']:
                             print(f"API Content Filter: {error_json['error']['message'][:200]}")
-                except:
+                except Exception:
                     pass
-                print(f"API returned error response (possibly content filter)")
+                print("API returned error response (possibly content filter)")
                 # Return a special string to avoid retrying content filter errors
                 # and to allow caching of this result (so we don't hit the filter again)
                 return "CONTENT_FILTERED"
 
-            print(f"API Error: Unexpected response format")
+            print("API Error: Unexpected response format")
             print(f"Response keys: {list(result.keys())}")
             return ""
 
         if not result['choices']:
-            print(f"API Error: Empty choices in response")
+            print("API Error: Empty choices in response")
             return ""
 
         content = result['choices'][0]['message']['content']

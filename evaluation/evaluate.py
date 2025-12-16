@@ -5,6 +5,7 @@ import json
 import csv
 import sys
 import os
+import argparse
 from collections import defaultdict
 from typing import Dict, List
 
@@ -17,8 +18,17 @@ from modules.categories import QuestionCategory
 
 def load_ground_truth(val_file: str = "data/val.json") -> List[Dict]:
     """Load validation set with ground truth"""
-    with open(val_file, 'r', encoding='utf-8') as f:
-        return json.load(f)
+    # Fallback for this workspace layout: dev set may live outside the VNPt folder
+    candidate_paths = [
+        val_file,
+        os.path.join(os.path.dirname(os.path.dirname(__file__)), "data", "val.json"),
+        os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(__file__))), "AInicorns_TheBuilder_public", "data", "val.json"),
+    ]
+    for path in candidate_paths:
+        if os.path.exists(path):
+            with open(path, 'r', encoding='utf-8') as f:
+                return json.load(f)
+    raise FileNotFoundError(f"Validation file not found. Tried: {candidate_paths}")
 
 
 def load_predictions(pred_file: str = "submission.csv") -> Dict[str, str]:
@@ -44,11 +54,11 @@ def calculate_accuracy(ground_truth: List[Dict], predictions: Dict[str, str]) ->
 
     for item in ground_truth:
         qid = item['qid']
-        true_answer = item['answer']
+        true_answer = str(item['answer']).strip().upper()
         question = item['question']
 
         # Get prediction
-        pred_answer = predictions.get(qid, 'A')  # Default A if missing
+        pred_answer = str(predictions.get(qid, 'A')).strip().upper()  # Default A if missing
 
         # Classify question
         category, _ = classifier.classify(question)
@@ -79,6 +89,12 @@ def calculate_accuracy(ground_truth: List[Dict], predictions: Dict[str, str]) ->
         'correct_answers': correct,
         'category_breakdown': category_accs
     }
+
+
+def filter_ground_truth_to_predictions(ground_truth: List[Dict], predictions: Dict[str, str]) -> List[Dict]:
+    """Keep only ground-truth items that have a prediction."""
+    pred_ids = set(predictions.keys())
+    return [item for item in ground_truth if item.get('qid') in pred_ids]
 
 
 def print_results(results: Dict):
@@ -128,10 +144,10 @@ def find_errors(ground_truth: List[Dict], predictions: Dict[str, str]) -> List[D
 
     for item in ground_truth:
         qid = item['qid']
-        true_answer = item['answer']
+        true_answer = str(item['answer']).strip().upper()
         question = item['question']
 
-        pred_answer = predictions.get(qid, 'A')
+        pred_answer = str(predictions.get(qid, 'A')).strip().upper()
 
         if pred_answer != true_answer:
             category, confidence = classifier.classify(question)
@@ -160,14 +176,19 @@ def save_error_analysis(errors: List[Dict], output_file: str = "evaluation/error
 
 def main():
     """Main evaluation"""
-    # Paths
-    val_file = "data/val.json"
-    pred_file = "submission.csv"
+    parser = argparse.ArgumentParser(description="Evaluate predictions against validation set")
+    parser.add_argument("--val", default="data/val.json", help="Path to val.json")
+    parser.add_argument("--pred", default="submission.csv", help="Path to prediction CSV")
+    parser.add_argument(
+        "--only-predicted",
+        action="store_true",
+        help="Score only qids present in --pred (useful for quick --limit runs)",
+    )
+    args = parser.parse_args()
 
-    # Check files exist
-    if not os.path.exists(val_file):
-        print(f"Error: {val_file} not found!")
-        return
+    # Paths
+    val_file = args.val
+    pred_file = args.pred
 
     if not os.path.exists(pred_file):
         print(f"Error: {pred_file} not found!")
@@ -175,8 +196,15 @@ def main():
         return
 
     print("Loading data...")
-    ground_truth = load_ground_truth(val_file)
+    try:
+        ground_truth = load_ground_truth(val_file)
+    except FileNotFoundError as e:
+        print(f"Error: {e}")
+        return
     predictions = load_predictions(pred_file)
+
+    if args.only_predicted:
+        ground_truth = filter_ground_truth_to_predictions(ground_truth, predictions)
 
     print(f"Loaded {len(ground_truth)} validation questions")
     print(f"Loaded {len(predictions)} predictions")
