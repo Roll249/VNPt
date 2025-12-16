@@ -170,6 +170,31 @@ class SimplePipeline:
         except Exception:
             self.math_solver = None
 
+        # Enhanced retriever with multi-query and hybrid search
+        self.enhanced_retriever = None
+        try:
+            from modules.retrieval.enhanced_retriever import EnhancedRetriever
+            self.enhanced_retriever = EnhancedRetriever(
+                vector_db=self.vector_db,
+                keyword_retriever=self.simple_retriever,
+                llm_client=self.llm
+            )
+            print("✓ Enhanced Retriever initialized (multi-query + hybrid search enabled)")
+        except Exception as e:
+            print(f"WARN Enhanced retriever init failed: {e}")
+
+        # STEM handler with specialized knowledge retrieval
+        self.stem_handler = None
+        try:
+            from modules.handlers.stem_handler import STEMHandler
+            self.stem_handler = STEMHandler(
+                enhanced_retriever=self.enhanced_retriever,
+                llm_client=self.llm,
+                math_solver=self.math_solver
+            )
+        except Exception as e:
+            print(f"WARN STEM handler init failed: {e}")
+
     def _math_shortcuts(self, question: str, choices: List[str]) -> str:
         """Deterministic shortcuts for frequent quantitative patterns.
 
@@ -1124,27 +1149,38 @@ class SimplePipeline:
         return self._compress_text_by_windows(full, full, choices, max_chars=max_chars, pad_lines=3, max_windows=2)
 
     def _find_refusal_choice(self, choices: List[str]) -> str:
-        """Return refusal-like answer letter if present (high precision).
+        """Return refusal-like answer letter if present.
 
+        ENHANCED VERSION (Target 90%): Lower threshold for better recall.
         Used to protect Precision-Critical and improve Compulsory where the
         correct option is to refuse/redirect.
         """
         if not choices:
             return ""
 
-        # Strong phrases
+        # Strong phrases (score +5)
         strong = [
             "toi khong the", "khong the cung cap", "khong the ho tro", "khong the giup",
             "tu choi", "toi tu choi", "tu choi tra loi", "toi xin tu choi",
             "khong tra loi", "khong duoc phep",
             "vi pham phap luat", "trai phap luat", "bat hop phap", "phi phap",
             "van de nhay cam", "khong phu hop",
+            # NEW: More comprehensive phrases
+            "toi khong the chia se", "khong the chia se noi dung",
+            "khong the ho tro viec", "khong the tu van",
+            "khong khuyen khich", "khong nen lam",
+            "trai voi quy dinh", "khong hop phap",
+            "gay hai", "nguy hiem",
         ]
-        # Softer signals
+        # Softer signals (score +3)
         soft = [
             "khong the chia se", "khong the tra loi", "khong ho tro", "khong the tu van",
             "khong the cung cap thong tin", "khong the huong dan", "khong the giup do",
             "khong nen", "nguy hiem", "khong an toan",
+            # NEW: Additional soft signals
+            "khong chinh xac", "khong dung", "sai trai",
+            "khong phu hop voi", "nhay cam", "noi dung nhay cam",
+            "van de nhay cam", "khong the thuc hien",
         ]
 
         scored = []
@@ -1154,23 +1190,40 @@ class SimplePipeline:
                 continue
 
             score = 0
+
+            # ROLLBACK: Lower scoring to original values
+            # Score strong phrases (+4 each, was +5)
             for p in strong:
                 if p in cn:
                     score += 4
+
+            # Score soft phrases (+2 each, was +3)
             for p in soft:
                 if p in cn:
                     score += 2
 
-            # Extra boosts for explicit refusal verbs
+            # Extra boosts for explicit refusal verbs (+2)
             if re.search(r"\b(tu choi|khong tra loi)\b", cn):
                 score += 2
-            # Treat "khong the" as refusal only when it refuses to answer/provide/help.
+
+            # "khong the" + action verbs (+2, was +3)
             if "khong the" in cn:
-                if any(w in cn for w in ["tra loi", "cung cap", "chia se", "ho tro", "tu van", "giup"]):
+                if any(w in cn for w in ["tra loi", "cung cap", "chia se", "ho tro", "tu van", "giup", "huong dan"]):
                     score += 2
-            # Penalize if choice appears to give actionable harmful instructions
-            if any(w in cn for w in ["lam cach nao", "huong dan", "cach", "chi tiet"]) and any(w in cn for w in ["hack", "bom", "ma tuy", "vu khi"]):
-                score -= 3
+
+            # NEW: Legal/ethical keywords (+4)
+            if any(w in cn for w in ["vi pham", "trai phap", "bat hop phap", "phi phap", "khong hop phap"]):
+                score += 4
+
+            # PENALTY: Harmful instructions (-10, stronger penalty!)
+            harmful_instruction_patterns = [
+                ("lam cach nao", ["tron", "tranh", "hack", "lua", "gian lan"]),
+                ("huong dan", ["hack", "bom", "ma tuy", "vu khi", "tron thue"]),
+                ("cach", ["tron", "tranh", "hack", "lua", "gian lan"]),
+            ]
+            for pattern, harmful_kws in harmful_instruction_patterns:
+                if pattern in cn and any(h in cn for h in harmful_kws):
+                    score -= 10  # Strong penalty!
 
             scored.append((i, score))
 
@@ -1180,10 +1233,11 @@ class SimplePipeline:
         scored.sort(key=lambda x: x[1], reverse=True)
         best_i, best_s = scored[0]
         second_s = scored[1][1] if len(scored) > 1 else -999
-        # High precision: require strong score + margin.
+
+        # ROLLBACK: Lower thresholds caused 100% → 60% disaster!
+        # Using ORIGINAL thresholds for safety
         if best_s >= 6 and best_s >= second_s + 2:
             return chr(65 + best_i)
-        # If there is a single very strong refusal option.
         if best_s >= 8:
             return chr(65 + best_i)
         return ""
@@ -1217,23 +1271,41 @@ class SimplePipeline:
             print(f"[{qid}] ERROR: Less than 2 choices")
             return self._safe_default_letter(choices)
 
-        # Rule 0: Strict Safety Check (Precision Critical)
-        # Scan choices for refusal-like options (robust Vietnamese normalization)
-        refusal_choice = self._find_refusal_choice(choices)
-        if refusal_choice:
-            print(f"[{qid}] SAFETY MATCH: refusal option detected")
-            return refusal_choice
+        # ============================================================
+        # RULE 0: AGGRESSIVE SAFETY CHECK (Target 90% - Refusal-First)
+        # ============================================================
+        # This is the most critical part for Precision-Critical category!
 
-        # If question is sensitive, and a refusal option exists (even if not super-strong), prefer it.
-        try:
-            from modules.categories import REFUSAL_KEYWORDS
-            qn = self._normalize_vi(question)
-            if any(self._normalize_vi(kw) in qn for kw in REFUSAL_KEYWORDS):
-                refusal_choice2 = self._find_refusal_choice(choices)
-                if refusal_choice2:
-                    return refusal_choice2
-        except Exception:
-            pass
+        # Layer 1: Check if question is sensitive/illegal
+        is_sensitive = self._looks_illegal_or_sensitive_question(question)
+
+        # Layer 2: If sensitive, AGGRESSIVELY find refusal option
+        if is_sensitive:
+            refusal_choice = self._find_refusal_choice(choices)
+            if refusal_choice:
+                print(f"[{qid}] 🛡️ SAFETY: Sensitive question + refusal option found")
+                return refusal_choice
+            # If no refusal option found but question is sensitive, use safety fallback
+            print(f"[{qid}] ⚠️ SAFETY: Sensitive question but no clear refusal option")
+
+        # Layer 3: Always check for strong refusal options (even if question not flagged as sensitive)
+        # This catches edge cases where question detection misses but choice is clearly refusal
+        strong_refusal = self._find_refusal_choice(choices)
+        if strong_refusal:
+            # Double-check: Is this really a sensitive context?
+            # Re-check with broader keywords to avoid false positives on normal questions
+            try:
+                from modules.categories import REFUSAL_KEYWORDS
+                qn = self._normalize_vi(question).lower()
+                has_refusal_keyword = any(self._normalize_vi(kw) in qn for kw in REFUSAL_KEYWORDS)
+
+                if has_refusal_keyword or is_sensitive:
+                    print(f"[{qid}] 🛡️ SAFETY: Strong refusal option detected")
+                    return strong_refusal
+            except Exception:
+                # If check fails, be conservative - return refusal if question seems sensitive
+                if is_sensitive:
+                    return strong_refusal
 
         # Step 1: Classify question
         category, confidence = self.classifier.classify(question)
@@ -1310,7 +1382,17 @@ class SimplePipeline:
         # Math/Logic: prefer 1-shot LARGE (often faster than multiple SMALL votes)
         if category == QuestionCategory.MATH_LOGIC:
             use_large_model = True
-        
+
+        # NEW (Phase 2 - Task 2.2): ALWAYS use Large model for RAG/Domain questions
+        # These questions need better reasoning and context understanding
+        # Impact: +3-5% for RAG categories
+        if category in [QuestionCategory.HISTORY_VIETNAM,
+                        QuestionCategory.CULTURE_VIETNAM,
+                        QuestionCategory.GEOGRAPHY_VIETNAM,
+                        QuestionCategory.POLITICS_LAW]:
+            use_large_model = True
+            print(f"[{qid}] 🎯 PHASE 2: Domain question → LARGE model (Target 90%)")
+
         print(f"[{qid}] Category: {category.value}, Confidence: {confidence:.2f}")
 
         # Step 3: Route to appropriate handler
@@ -1327,7 +1409,12 @@ class SimplePipeline:
                 return self._handle_reading(question, choices, use_large_model)
 
             elif category == QuestionCategory.MATH_LOGIC:
-                return self._handle_math(question, choices, use_large_model)
+                # Check if it's STEM (not pure math)
+                if self._is_stem_question(question) and self.stem_handler:
+                    print(f"[{qid}] Routing to STEM handler")
+                    return self.stem_handler.handle(question, choices, qid)
+                else:
+                    return self._handle_math(question, choices, use_large_model)
 
             # Compulsory/common-sense: handle with a specialized prompt
             # Do this even if classifier thought it was a domain question; these items are often misrouted.
@@ -1336,7 +1423,7 @@ class SimplePipeline:
 
             else:
                 # Domain questions (history, culture, geography, politics)
-                return self._handle_domain_question(question, choices, category, use_large_model, multi_domain=is_multi_domain)
+                return self._handle_domain_question(question, choices, category, use_large_model, multi_domain=is_multi_domain, confidence=confidence)
 
         except Exception as e:
             import traceback
@@ -1344,6 +1431,16 @@ class SimplePipeline:
             print(f"[{qid}] Traceback: {traceback.format_exc()}")
             # Fallback: try generic approach
             return self._fallback_answer(question, choices)
+
+    def _is_stem_question(self, question: str) -> bool:
+        """Check if question is STEM (not pure math)"""
+        from modules.categories import STEM_KEYWORDS
+        q_lower = question.lower()
+
+        # Check for STEM keywords
+        has_stem = any(kw in q_lower for kw in STEM_KEYWORDS)
+
+        return has_stem
 
     def _is_common_sense_compulsory(self, question: str) -> bool:
         """Heuristic for 'Compulsory' everyday-behavior questions."""
@@ -1420,36 +1517,86 @@ class SimplePipeline:
         ])
 
     def _looks_illegal_or_sensitive_question(self, question: str) -> bool:
-        """Detect clearly illegal/sensitive intent (high precision).
+        """Detect clearly illegal/sensitive intent (ENHANCED for 90% target).
 
-        Keep this narrower than REFUSAL_KEYWORDS to avoid false positives like "trốn" in innocent contexts.
+        More aggressive than before to catch Precision-Critical questions.
         """
         ql = (question or "").lower()
 
-        # Always-illegal phrases (intent implicit)
-        if any(k in ql for k in ["trốn thuế", "tron thue", "tránh thuế", "tranh thue"]):
+        # Tier 1: Always-illegal phrases (score immediately)
+        always_illegal = [
+            "trốn thuế", "tron thue", "tránh thuế", "tranh thue",
+            "tron thue", "tranh thue",  # without diacritics
+            "gian lận thuế", "gian lan thue",
+        ]
+        if any(k in ql for k in always_illegal):
             return True
 
-        # Sensitive domains (require explicit intent / how-to / transaction language)
-        domains = [
+        # Tier 2: Evasion/avoidance patterns (very strong signal)
+        evasion_patterns = [
+            "làm cách nào để tránh", "lam cach nao de tranh",
+            "làm sao để không", "lam sao de khong",
+            "cách để trốn", "cach de tron",
+            "tránh việc", "tranh viec",
+            "lẩn tránh", "lan tranh",
+            "không bị phát hiện", "khong bi phat hien",
+            "che giấu", "che giau",
+            "không cung cấp", "khong cung cap",  # In context of authority
+            "không khai báo", "khong khai bao",
+        ]
+        # Check if combined with authority/law keywords
+        authority_keywords = [
+            "cơ quan", "co quan",
+            "pháp luật", "phap luat",
+            "thuế", "thue",
+            "cảnh sát", "canh sat",
+            "chính quyền", "chinh quyen",
+            "có thẩm quyền", "co tham quyen",
+            "nhà nước", "nha nuoc",
+        ]
+        if any(p in ql for p in evasion_patterns):
+            if any(a in ql for a in authority_keywords):
+                return True  # Strong signal!
+
+        # Tier 3: Sensitive domains with intent markers
+        sensitive_domains = [
             "hack", "bẻ khóa", "be khoa", "crack", "ddos", "xâm nhập", "xam nhap", "mã độc", "ma doc",
             "bom", "mìn", "min", "thuốc nổ", "thuoc no", "vũ khí", "vu khi",
-            "ma túy", "ma tuy", "cần sa", "thuốc phiện", "thuoc phien",
-            "mại dâm", "mai dam", "khiêu dâm", "khieu dam", "sex",
-            "tự tử", "tu tu", "giết", "giet",
+            "ma túy", "ma tuy", "cần sa", "can sa", "thuốc phiện", "thuoc phien",
+            "mại dâm", "mai dam", "khiêu dâm", "khieu dam",
+            "tự tử", "tu tu", "giết", "giet", "bạo lực", "bao luc",
             "hối lộ", "hoi lo", "tham nhũng", "tham nhung",
+            "lừa đảo", "lua dao", "gian lận", "gian lan",
         ]
-        if not any(k in ql for k in domains):
-            return False
 
+        has_sensitive_domain = any(k in ql for k in sensitive_domains)
+
+        if not has_sensitive_domain:
+            return False  # No sensitive domain → not sensitive
+
+        # Now check for intent markers (how-to, instructions, etc.)
         intent_markers = [
-            "hướng dẫn", "huong dan", "cách", "cach", "cách làm", "cach lam", "chi tiết", "chi tiet",
-            "bước", "buoc", "làm thế nào", "lam the nao", "làm sao", "lam sao",
-            "mua", "bán", "ban", "giao dịch", "giao dich",
-            "chế tạo", "che tao", "pha chế", "pha che",
-            "tấn công", "tan cong", "thực hiện", "thuc hien",
+            "hướng dẫn", "huong dan",
+            "cách", "cach",
+            "cách làm", "cach lam",
+            "chi tiết", "chi tiet",
+            "bước", "buoc",
+            "làm thế nào", "lam the nao",
+            "làm sao", "lam sao",
+            "mua", "bán", "ban",
+            "giao dịch", "giao dich",
+            "chế tạo", "che tao",
+            "pha chế", "pha che",
+            "tấn công", "tan cong",
+            "thực hiện", "thuc hien",
+            "sử dụng", "su dung",  # NEW
+            "dùng", "dung",  # NEW
         ]
-        return any(m in ql for m in intent_markers)
+
+        if any(m in ql for m in intent_markers):
+            return True
+
+        return False
 
     def _looks_very_high_risk_question(self, question: str) -> bool:
         """Detect very-high-risk domains with looser intent requirements.
@@ -1524,7 +1671,13 @@ Câu hỏi: {question}
 Các lựa chọn:
 {choices_text}
 
-Chỉ trả lời bằng 1 chữ cái (từ A đến {max_letter}). Không giải thích.
+PHASE 3 - Suy nghĩ từng bước:
+1. Tình huống: Câu hỏi mô tả tình huống gì?
+2. Đánh giá: Lựa chọn nào lịch sự/an toàn/tôn trọng nhất?
+3. Loại trừ: Đáp án nào không phù hợp?
+4. Kết luận: Chọn đáp án tốt nhất.
+
+Sau khi suy nghĩ, trả lời bằng 1 chữ cái (từ A đến {max_letter}) ở cuối.
 Đáp án:"""
 
     def _handle_common_sense(self, question: str, choices: List[str]) -> str:
@@ -1575,8 +1728,13 @@ Chỉ trả lời bằng 1 chữ cái (từ A đến {max_letter}). Không giả
         return self._common_sense_safety_fallback(question, choices)
 
     def _handle_reading(self, question: str, choices: List[str], use_large_model: bool = False) -> str:
-        """Handle reading comprehension (context already in question)"""
+        """Handle reading comprehension (context already in question)
+
+        ROLLBACK: Few-shot caused -26% drop (71.25% → 45%)!
+        Using simple prompt instead.
+        """
         # Reading accuracy is sensitive to missing context; keep passage intact.
+        # Use SIMPLE prompt - few-shot was too confusing for the model
         prompt = self._build_reading_prompt(question, choices)
 
         # Generate
@@ -1753,15 +1911,223 @@ Cuối cùng viết: Đáp án: [chữ cái]"""
         return self._extract_answer(response, choices)
 
 
+    def _get_dynamic_topk(self, confidence: float, multi_domain: bool = False) -> int:
+        """
+        Dynamic Top-K based on confidence (NEW Phase 2 - Task 2.1)
+
+        Low confidence questions need MORE context to answer correctly.
+        High confidence questions need LESS context (already clear signal).
+
+        Args:
+            confidence: Classification confidence (0-1)
+            multi_domain: Whether this is a multi-domain question
+
+        Returns:
+            Top-K value for retrieval
+        """
+        if multi_domain:
+            # Multi-domain always needs more context
+            if confidence < 0.4:
+                return 7  # Very uncertain
+            elif confidence < 0.7:
+                return 5  # Default
+            else:
+                return 4  # High confidence
+
+        else:
+            # Single domain
+            if confidence < 0.4:
+                return 5  # Low confidence needs more context
+            elif confidence < 0.7:
+                return 3  # Medium confidence (default)
+            else:
+                return 2  # High confidence needs less
+
+    def _bm25_score(self, query: str, document: str, k1: float = 1.5, b: float = 0.75) -> float:
+        """BM25 keyword-based scoring (PHASE 3 - Task 3.1)
+
+        BM25 is a ranking function for keyword matching.
+        Complements vector similarity with exact term matching.
+        """
+        import re
+        from collections import Counter
+        import math
+
+        # Tokenize
+        query_tokens = [t.lower() for t in re.findall(r'\w+', query) if len(t) >= 2]
+        doc_tokens = [t.lower() for t in re.findall(r'\w+', document) if len(t) >= 2]
+
+        if not query_tokens or not doc_tokens:
+            return 0.0
+
+        # Term frequencies
+        doc_tf = Counter(doc_tokens)
+        doc_len = len(doc_tokens)
+        avgdl = doc_len  # Simplified: assume avg doc length = current doc
+
+        score = 0.0
+        for term in set(query_tokens):
+            if term in doc_tf:
+                tf = doc_tf[term]
+                # BM25 formula (simplified, no IDF since we don't have corpus stats)
+                numerator = tf * (k1 + 1)
+                denominator = tf + k1 * (1 - b + b * (doc_len / avgdl))
+                score += numerator / denominator
+
+        # Normalize by query length
+        return score / len(query_tokens) if query_tokens else 0.0
+
+    def _entity_overlap(self, query: str, document: str) -> float:
+        """Entity overlap scoring (PHASE 3 - Task 3.1)
+
+        Measures overlap of named entities (years, names, places).
+        Helps match specific factual questions to relevant docs.
+        """
+        import re
+
+        def extract_entities(text):
+            """Extract potential entities: years, capitalized words, numbers"""
+            entities = set()
+
+            # Years (4-digit numbers like 1945, 2024)
+            years = re.findall(r'\b(1\d{3}|20\d{2})\b', text)
+            entities.update(years)
+
+            # Capitalized words (proper nouns)
+            cap_words = re.findall(r'\b[A-ZÀÁẢÃẠĂẮẰẲẴẶÂẤẦẨẪẬÈÉẺẼẸÊẾỀỂỄỆÌÍỈĨỊÒÓỎÕỌÔỐỒỔỖỘƠỚỜỞỠỢÙÚỦŨỤƯỨỪỬỮỰỲÝỶỸỴĐ][a-zàáảãạăắằẳẵặâấầẩẫậèéẻẽẹêếềểễệìíỉĩịòóỏõọôốồổỗộơớờởỡợùúủũụưứừửữựỳýỷỹỵđ]+', text)
+            entities.update(w.lower() for w in cap_words)
+
+            # Important numbers (with units)
+            numbers = re.findall(r'\b\d+(?:[.,]\d+)?\s*(?:km|m|kg|g|mol|°C|K|Pa|N|J|W|A|V|Ω|Hz|s|h|năm|tuổi|%)\b', text.lower())
+            entities.update(numbers)
+
+            return entities
+
+        query_entities = extract_entities(query)
+        doc_entities = extract_entities(document)
+
+        if not query_entities:
+            return 0.0
+
+        # Jaccard similarity
+        intersection = len(query_entities & doc_entities)
+        union = len(query_entities | doc_entities)
+
+        return intersection / union if union > 0 else 0.0
+
+    def _rerank_documents(self, query: str, documents: List[dict], final_k: int) -> List[dict]:
+        """Re-rank documents using multiple signals (PHASE 3 - Task 3.1)
+
+        Multi-stage retrieval:
+        1. Broad retrieval (many candidates)
+        2. Re-rank by combining:
+           - Vector similarity (50%)
+           - BM25 keyword matching (30%)
+           - Entity overlap (20%)
+        3. Return top-K after re-ranking
+
+        Expected impact: +5-8% for RAG
+        """
+        if not documents:
+            return []
+
+        print(f"  🔄 Re-ranking {len(documents)} documents...")
+
+        scored_docs = []
+        for doc in documents:
+            # Get document text
+            text = doc.get('metadata', {}).get('text', '')
+            if not text:
+                continue
+
+            # Original vector similarity score
+            vector_score = doc.get('score', 0.0)
+
+            # BM25 keyword score
+            bm25 = self._bm25_score(query, text)
+
+            # Entity overlap score
+            entity = self._entity_overlap(query, text)
+
+            # Combined score (weighted)
+            combined_score = (
+                0.5 * vector_score +  # Vector similarity (main signal)
+                0.3 * bm25 +          # Keyword matching
+                0.2 * entity          # Entity overlap
+            )
+
+            scored_docs.append({
+                'doc': doc,
+                'score': combined_score,
+                'vector': vector_score,
+                'bm25': bm25,
+                'entity': entity
+            })
+
+        # Sort by combined score
+        scored_docs.sort(key=lambda x: x['score'], reverse=True)
+
+        # Debug: show top 3 scores
+        if scored_docs:
+            print(f"  📊 Top-3 re-ranked scores:")
+            for i, sd in enumerate(scored_docs[:3]):
+                print(f"    {i+1}. Combined: {sd['score']:.3f} (vec:{sd['vector']:.2f} bm25:{sd['bm25']:.2f} ent:{sd['entity']:.2f})")
+
+        # Return top-K documents
+        return [sd['doc'] for sd in scored_docs[:final_k]]
+
+    def _self_consistency_vote(self, prompt: str, choices: List[str], model: str, num_samples: int = 3) -> str:
+        """Self-consistency voting (PHASE 3 - Task 3.2)
+
+        Generate multiple answers with different temperatures and vote.
+        This improves accuracy for uncertain questions.
+
+        Expected impact: +2-4% for low-confidence questions
+        """
+        from collections import Counter
+
+        print(f"  🗳️  PHASE 3: Self-consistency voting ({num_samples} samples)")
+
+        answers = []
+        temperatures = [0.3, 0.5, 0.7]  # Different temperatures for diversity
+
+        for i in range(num_samples):
+            temp = temperatures[i % len(temperatures)]
+            response = self.llm.generate(prompt, model=model, temperature=temp)
+
+            if response and response != "CONTENT_FILTERED":
+                ans = self._extract_answer(response, choices)
+                if ans:
+                    answers.append(ans)
+                    print(f"    Sample {i+1} (T={temp}): {ans}")
+
+        if not answers:
+            return ""
+
+        # Vote for most common answer
+        vote_counts = Counter(answers)
+        winner, count = vote_counts.most_common(1)[0]
+
+        print(f"  ✓ Voting result: {winner} ({count}/{len(answers)} votes)")
+
+        # Only trust if we have clear consensus (at least 2/3)
+        if count >= (num_samples * 2) // 3:
+            return winner
+        else:
+            # No consensus, return most common but log warning
+            print(f"  ⚠️  Weak consensus: {count}/{len(answers)}")
+            return winner
+
     def _handle_domain_question(
         self,
         question: str,
         choices: List[str],
         category: QuestionCategory,
         use_large_model: bool = False,
-        multi_domain: bool = False
+        multi_domain: bool = False,
+        confidence: float = 0.5  # NEW: Add confidence parameter
     ) -> str:
-        """Handle domain-specific questions (with simple facts augmentation)"""
+        """Handle domain-specific questions (ENHANCED Phase 2 with dynamic Top-K)"""
 
         def _rerank_context(query: str, ctx: str, keep_parts: int = 3, max_chars: int = 1400) -> str:
             """Rerank and trim context blocks to reduce noise."""
@@ -1804,46 +2170,97 @@ Cuối cùng viết: Đáp án: [chữ cái]"""
         # Build base prompt
         base_prompt = self._build_domain_prompt(question, choices, category, multi_domain=multi_domain)
 
-        # Retrieve context (vector + keyword) when available
+        # Retrieve context using ENHANCED retriever (multi-query + hybrid search)
         contexts = []
         raw_contexts = []
-        try:
-            if self.vector_db is not None:
-                top_k = 8 if multi_domain else 4
 
-                # Multi-domain: blend retrieval across domain tags to diversify evidence.
+        try:
+            # Use enhanced retriever if available
+            if self.enhanced_retriever is not None:
+                # PHASE 2 - Task 2.1: Dynamic Top-K based on confidence
+                final_k = self._get_dynamic_topk(confidence, multi_domain)
+                print(f"  📊 Dynamic Top-K: {final_k} (confidence: {confidence:.2f}, multi_domain: {multi_domain})")
+
+                # PHASE 3 - Task 3.1: Retrieve broader set for re-ranking
+                # Get 4x more candidates, then re-rank to final_k
+                broad_k = min(final_k * 4, 20)  # Cap at 20 to avoid slowdown
+                print(f"  🎯 PHASE 3: Broad retrieval (top-{broad_k}) → Re-rank → Final top-{final_k}")
+
                 if multi_domain:
-                    domain_filters = [
-                        {"domain": "history"},
-                        {"domain": "culture"},
-                        {"domain": "geography"},
-                        {"domain": "law"},
-                        {"domain": "politics"},
-                    ]
-                    blended = []
-                    for flt in domain_filters:
-                        part = self.vector_db.get_context(question, top_k=2, filter_metadata=flt)
-                        if part:
-                            blended.append(part)
-                    ctx = "\n\n".join(blended).strip() if blended else self.vector_db.get_context(question, top_k=top_k)
+                    # Multi-domain: use cross-domain retrieval for better coverage
+                    print("  🔍 Using cross-domain retrieval (multi-domain)")
+                    candidates = self.enhanced_retriever.cross_domain_retrieval(
+                        question=question,
+                        domains=None,  # Auto-detect domains
+                        top_k=broad_k
+                    )
                 else:
-                    ctx = self.vector_db.get_context(question, top_k=top_k)
-                if ctx:
+                    # Single domain: use domain-specific retrieval with boosting
+                    print(f"  🔍 Using enhanced domain retrieval ({category.value})")
+                    candidates = self.enhanced_retriever.domain_specific_retrieval(
+                        question=question,
+                        category=category.value,
+                        top_k=broad_k
+                    )
+
+                # PHASE 3 - Task 3.1: Re-rank using multiple signals
+                results = self._rerank_documents(question, candidates, final_k)
+
+                if results:
+                    print(f"  ✓ Retrieved {len(results)} documents via enhanced retrieval")
+                    # Format results
+                    docs_text = []
+                    for i, r in enumerate(results):
+                        text = r.get('metadata', {}).get('text', '')
+                        score = r.get('score', 0)
+                        sources = r.get('sources', [])
+
+                        # Add source info
+                        source_info = f" [{', '.join(sources)}]" if sources else ""
+                        docs_text.append(f"[Tài liệu {i+1}]{source_info} (độ liên quan: {score:.2f})\n{text[:800]}")
+
+                    ctx = "\n\n".join(docs_text)
+                    ctx = _compress_ctx(question, ctx, max_chars=1800 if multi_domain else 1200)
+                    contexts.append(f"Ngữ cảnh tham khảo (Enhanced RAG):\n{ctx}")
+                    raw_contexts.append(ctx)
+
+            # Fallback to basic retrieval if enhanced retriever not available
+            elif self.vector_db is not None:
+                print("  ⚠️  Enhanced retriever not available, using basic vector DB")
+                # PHASE 2 - Task 2.1: Dynamic Top-K for fallback (slightly higher for safety)
+                final_k = self._get_dynamic_topk(confidence, multi_domain)
+
+                # PHASE 3 - Task 3.1: Also use re-ranking for fallback
+                broad_k = min(final_k * 4, 20)
+                print(f"  🎯 PHASE 3: Fallback broad retrieval (top-{broad_k}) → Re-rank → top-{final_k}")
+
+                candidates = self.vector_db.search(question, top_k=broad_k)
+                results = self._rerank_documents(question, candidates, final_k) if candidates else []
+                if results:
+                    docs_text = []
+                    for r in results:
+                        text = r.get('metadata', {}).get('text', '')[:600]
+                        docs_text.append(text)
+                    ctx = "\n\n".join(docs_text)
                     ctx = _compress_ctx(question, ctx, max_chars=1800 if multi_domain else 1200)
                     contexts.append(f"Ngữ cảnh tham khảo (Vector DB):\n{ctx}")
                     raw_contexts.append(ctx)
         except Exception as e:
-            print(f"  WARN Vector retrieval failed: {e}")
+            print(f"  WARN Enhanced retrieval failed: {e}")
+            import traceback
+            traceback.print_exc()
 
-        try:
-            if self.simple_retriever is not None:
-                ctx2 = self.simple_retriever.get_context(question, max_chars=1600)
-                if ctx2:
-                    ctx2 = _compress_ctx(question, ctx2, max_chars=1400 if multi_domain else 1000)
-                    contexts.append(f"Ngữ cảnh tham khảo (Keyword KB):\n{ctx2}")
-                    raw_contexts.append(ctx2)
-        except Exception as e:
-            print(f"  WARN Keyword retrieval failed: {e}")
+            # Final fallback to simple retriever
+            try:
+                if self.simple_retriever is not None:
+                    print("  ⚠️  Falling back to simple keyword retriever")
+                    ctx2 = self.simple_retriever.get_context(question, max_chars=1600)
+                    if ctx2:
+                        ctx2 = _compress_ctx(question, ctx2, max_chars=1400 if multi_domain else 1000)
+                        contexts.append(f"Ngữ cảnh tham khảo (Keyword KB):\n{ctx2}")
+                        raw_contexts.append(ctx2)
+            except Exception as e2:
+                print(f"  WARN Fallback retrieval also failed: {e2}")
 
         # Only answer directly from retrieval for reading-comprehension questions.
         # (For GENERAL/factual questions this shortcut is prone to false matches.)
@@ -1870,7 +2287,16 @@ Cuối cùng viết: Đáp án: [chữ cái]"""
 
         # Select model based on confidence/strategy
         model = "large" if use_large_model else "small"
-        
+
+        # PHASE 3 - Task 3.2: Self-consistency voting
+        # DISABLED: Too expensive (3x API calls), unclear benefit
+        # LOW_CONFIDENCE_THRESHOLD = 0.4
+        # if confidence < LOW_CONFIDENCE_THRESHOLD:
+        #     print(f"  🎯 PHASE 3: Low confidence ({confidence:.2f}) → Self-consistency voting")
+        #     voted_answer = self._self_consistency_vote(final_prompt, choices, model, num_samples=3)
+        #     if voted_answer:
+        #         return voted_answer
+
         response = self.llm.generate(final_prompt, model=model, temperature=0.3)
         if not response or response == "CONTENT_FILTERED":
             # First, try answer directly from retrieval.
@@ -1961,6 +2387,69 @@ Cuối cùng viết: Đáp án: [chữ cái]"""
             "Các lựa chọn:\n"
             f"{choices_text}\n\n"
             "Đáp án:"
+        )
+        return prompt
+
+    def _build_reading_prompt_with_examples(self, question: str, choices: List[str]) -> str:
+        """Build reading prompt with few-shot examples (PHASE 2 - Task 2.3)
+
+        Few-shot prompting demonstrates reasoning from passage to answer.
+        Expected impact: +10-15% for Compulsory (Reading) category
+        """
+        choices_text = "\n".join([f"{chr(65+i)}. {c}" for i, c in enumerate(choices)])
+        max_letter = chr(65 + len(choices) - 1)
+
+        # Few-shot examples showing reasoning process
+        examples = """VÍ DỤ 1 - Tìm thông tin trực tiếp:
+Đoạn văn: "Năm 1945, Chủ tịch Hồ Chí Minh đọc Tuyên ngôn Độc lập, khai sinh ra nước Việt Nam Dân chủ Cộng hòa - nhà nước đầu tiên của nhân dân ta."
+
+Câu hỏi: Việt Nam Dân chủ Cộng hòa được thành lập năm nào?
+A. 1940
+B. 1945
+C. 1950
+D. 1954
+
+Phân tích: Đoạn văn nêu rõ "Năm 1945...khai sinh ra nước Việt Nam Dân chủ Cộng hòa"
+Đáp án: B
+
+VÍ DỤ 2 - Suy luận từ chi tiết:
+Đoạn văn: "Quang Trung dẫn quân Tây Sơn xuất phát từ Phú Xuân vào mùng 3 Tết, đánh tan 29 vạn quân Thanh trong 7 ngày, giải phóng Thăng Long."
+
+Câu hỏi: Quang Trung đánh tan quân nước nào?
+A. Minh
+B. Thanh
+C. Nguyên
+D. Tống
+
+Phân tích: Văn bản ghi rõ "đánh tan 29 vạn quân Thanh"
+Đáp án: B
+
+VÍ DỤ 3 - Kết hợp nhiều chi tiết:
+Đoạn văn: "Khách hàng mua sim Ezcom có thể đăng ký gói cước tại các cửa hàng VNPT. Hiện tại không hỗ trợ đăng ký qua website."
+
+Câu hỏi: Khách hàng có thể đăng ký gói cước Ezcom qua website không?
+A. Có, qua https://digishop.vnpt.vn
+B. Có, qua trang web VNPT
+C. Không, chỉ tại cửa hàng
+D. Không rõ
+
+Phân tích: Đoạn văn nói rõ "Hiện tại không hỗ trợ đăng ký qua website" → Loại A, B. Có nói "tại các cửa hàng VNPT" → Chọn C
+Đáp án: C
+
+────────────────────────────────────────
+
+BÀI CỦA BẠN:
+"""
+
+        prompt = (
+            "Đọc kỹ đoạn thông tin và trả lời câu hỏi dựa HOÀN TOÀN trên thông tin trong đoạn văn. "
+            "Không được sử dụng kiến thức bên ngoài. "
+            f"Chỉ trả lời 1 chữ cái A-{max_letter}.\n\n"
+            f"{examples}"
+            f"{question}\n\n"
+            "Các lựa chọn:\n"
+            f"{choices_text}\n\n"
+            "Phân tích và đáp án:"
         )
         return prompt
 

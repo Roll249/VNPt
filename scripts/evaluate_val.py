@@ -18,7 +18,7 @@ except ImportError:
     sys.exit(1)
 
 def main():
-    val_path = os.path.join(project_root, "AInicorns_TheBuilder_public_v1.1", "data", "val.json")
+    val_path = os.path.join(project_root, "data", "val.json")
     
     if not os.path.exists(val_path):
         print(f"Error: Validation file not found at {val_path}")

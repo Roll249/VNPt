@@ -15,48 +15,51 @@ class VietnameseWikiCrawler:
         })
 
     def crawl_article(self, title: str) -> dict:
-        """Crawl single Wikipedia article by title (part after /wiki/)"""
-        url = self.BASE_URL + urllib.parse.quote(title)
-        
+        """Crawl single Wikipedia article by title using API"""
         try:
-            response = self.session.get(url)
+            # Use Wikipedia API to get article content
+            params = {
+                "action": "query",
+                "format": "json",
+                "titles": title,
+                "prop": "extracts",
+                "explaintext": True,  # Get plain text instead of HTML
+                "exsectionformat": "plain"
+            }
+
+            response = self.session.get(self.API_URL, params=params)
+
             if response.status_code != 200:
-                print(f"Failed to fetch {title}: {response.status_code}")
                 return None
-                
-            soup = BeautifulSoup(response.content, 'html.parser')
 
-            # Extract title (heading)
-            heading = soup.find('h1', {'id': 'firstHeading'})
-            display_title = heading.get_text() if heading else title
+            data = response.json()
+            pages = data.get('query', {}).get('pages', {})
 
-            # Extract main content
-            content_div = soup.find('div', {'id': 'mw-content-text'})
-            if not content_div:
+            if not pages:
                 return None
-                
-            # Remove unwanted elements (tables, references, edit links)
-            for tag in content_div.find_all(['table', 'div', 'sup', 'style', 'script']):
-                # Keep some divs if they are just structual, but remove boxes. 
-                # Simplest is to remove 'infobox', 'navbox', 'reflist'
-                classes = tag.get('class', [])
-                if any(c in classes for c in ['infobox', 'navbox', 'reflist', 'reference']):
-                    tag.decompose()
 
-            paragraphs = content_div.find_all('p')
-            text_content = []
-            for p in paragraphs:
-                text = p.get_text().strip()
-                if text:
-                    text_content.append(text)
-            
-            full_text = '\n\n'.join(text_content)
+            # Get first page (should be only one)
+            page_id = list(pages.keys())[0]
+            page = pages[page_id]
+
+            # Check if page exists
+            if page_id == '-1' or 'missing' in page:
+                return None
+
+            # Extract content
+            content = page.get('extract', '')
+            display_title = page.get('title', title)
+
+            if not content or len(content) < 100:
+                return None
+
+            url = self.BASE_URL + urllib.parse.quote(title.replace(' ', '_'))
 
             return {
                 'title': display_title,
-                'slug': title,
+                'slug': title.replace(' ', '_'),
                 'url': url,
-                'content': full_text
+                'content': content
             }
 
         except Exception as e:
@@ -75,7 +78,45 @@ class VietnameseWikiCrawler:
         try:
             response = self.session.get(self.API_URL, params=params)
             data = response.json()
-            return [result['title'].replace(' ', '_') for result in data.get('query', {}).get('search', [])]
+            return [result['title'] for result in data.get('query', {}).get('search', [])]
         except Exception as e:
             print(f"Error searching {query}: {e}")
+            return []
+
+    def get_category_members(self, category: str, limit: int = 100) -> list:
+        """Get all articles in a Wikipedia category"""
+        try:
+            members = []
+            continue_token = None
+
+            while len(members) < limit:
+                params = {
+                    "action": "query",
+                    "format": "json",
+                    "list": "categorymembers",
+                    "cmtitle": f"Category:{category}" if not category.startswith("Category:") else category,
+                    "cmlimit": min(500, limit - len(members)),
+                    "cmtype": "page",  # Only pages, not subcategories
+                    "cmnamespace": "0"  # Main namespace only
+                }
+
+                if continue_token:
+                    params['cmcontinue'] = continue_token
+
+                response = self.session.get(self.API_URL, params=params)
+                data = response.json()
+
+                category_members = data.get('query', {}).get('categorymembers', [])
+                members.extend([member['title'] for member in category_members])
+
+                # Check if there's more
+                if 'continue' in data and len(members) < limit:
+                    continue_token = data['continue'].get('cmcontinue')
+                else:
+                    break
+
+            return members[:limit]
+
+        except Exception as e:
+            print(f"Error getting category members for {category}: {e}")
             return []
